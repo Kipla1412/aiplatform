@@ -55,12 +55,12 @@ def download_pdfs(ti, **kwargs):
     Download PDFs
     """
     papers = ti.xcom_pull(task_ids="fetch_task")
-
+    config = ti.xcom_pull(task_ids="credentials_task")
     if not papers:
         print("No papers found")
         return
 
-    downloader = ArxivPDFDownloader()
+    downloader = ArxivPDFDownloader(config)
 
     async def run():
         for p in papers:

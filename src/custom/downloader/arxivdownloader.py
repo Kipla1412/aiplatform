@@ -27,7 +27,7 @@ class ArxivPDFDownloader:
     - Parse PDF contents
     """
 
-    def __init__(self, config: Optional[ArxivPDFConfig] = None):
+    def __init__(self, config: Dict[str, str]):
         """
         Initialize downloader with configuration.
 
@@ -35,16 +35,14 @@ class ArxivPDFDownloader:
             config (ArxivPDFConfig, optional):
                 If not provided, loads defaults & .env config.
         """
-        self.config = config or ArxivPDFConfig()
-
-        self.download_dir = Path(self.config.download_dir)
+        self.download_dir = Path(config["download_dir"])
         self.download_dir.mkdir(parents=True, exist_ok=True)
 
-        self.timeout = self.config.timeout_seconds
-        self.rate_limit_delay = self.config.rate_limit_delay
-        self.max_retries = self.config.max_retries
-        self.retry_backoff = self.config.retry_backoff
-
+        self.timeout = config["timeout_seconds"]
+        self.rate_limit_delay = config["rate_limit_delay"]
+        self.max_retries = config["max_retries"]
+        self.retry_backoff = config["retry_backoff"]
+        
         self._last_request_time: Optional[float] = None
         self._client: Optional[httpx.AsyncClient] = None
 
