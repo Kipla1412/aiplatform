@@ -1,181 +1,166 @@
+from pathlib import Path
+from typing import Optional, Dict
 import asyncio
+import httpx
 import time
-import xml.etree.ElementTree as ET
-from urllib.parse import urlencode, quote
-from typing import Dict, List, Optional
-from ..connectors.arxivconnector import ArxivConnector
+import logging
+
+from ..credentials.localsettings.pdfconfig import ArxivPDFConfig
+
+logger = logging.getLogger(__name__)
 
 
-class ArxivExtractor:
+class ArxivPDFDownloader:
     """
-    Service Layer - Arxiv Metadata Extractor
+    Infrastructure Layer - Arxiv PDF Downloader
 
     Responsibilities:
-    - Uses ArxivConnector HTTP client
-    - Applies rate limiting
-    - Calls Arxiv API
-    - Parses XML into structured JSON metadata
+    - Download arXiv PDFs asynchronously
+    - Respect arXiv polite rate limits
+    - Retry failed downloads with backoff
+    - Cache already-downloaded PDFs
+    - Use reusable HTTP client session
 
     Does NOT:
-    - Store data
-    - Handle DB logic
-    - Perform PDF parsing
+    - Know business logic
+    - Handle database logic
+    - Parse PDF contents
     """
 
-    def __init__(self, connector: ArxivConnector, config: Dict[str, str]):
+    def __init__(self, config: Optional[ArxivPDFConfig] = None):
         """
-        Initialize extractor service.
+        Initialize downloader with configuration.
 
         Args:
-            connector (ArxivConnector):
-                Established Arxiv HTTP connector
-
-            config (Dict):
-                Required keys:
-                    base_url (str)
-                    rate_limit_delay (int)
-                    max_results (int)
-                    search_category (str)
-                    namespaces (dict)
+            config (ArxivPDFConfig, optional):
+                If not provided, loads defaults & .env config.
         """
-        self.connector = connector
-        self.base_url = config["base_url"]
-        self.rate_limit_delay = config["rate_limit_delay"]
-        self.max_results = config["max_results"]
-        self.category = config["search_category"]
-        self.ns = config["namespaces"]
+        self.config = config or ArxivPDFConfig()
+
+        self.download_dir = Path(self.config.download_dir)
+        self.download_dir.mkdir(parents=True, exist_ok=True)
+
+        self.timeout = self.config.timeout_seconds
+        self.rate_limit_delay = self.config.rate_limit_delay
+        self.max_retries = self.config.max_retries
+        self.retry_backoff = self.config.retry_backoff
+
         self._last_request_time: Optional[float] = None
+        self._client: Optional[httpx.AsyncClient] = None
+
+        logger.info(
+            f"ArxivPDFDownloader initialized | dir={self.download_dir} "
+            f"timeout={self.timeout}s rate_limit={self.rate_limit_delay}s"
+        )
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        """
+        Lazily create & reuse async HTTP client.
+
+        Returns:
+            httpx.AsyncClient
+        """
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=self.timeout)
+        return self._client
+
+   
 
     async def _rate_limit(self):
         """
-        Ensures Arxiv rate limit policy is respected.
-        Arxiv allows:
-            - max 1 request every 3 seconds recommended
+        Respect arXiv's polite usage policy.
 
-        Behavior:
-        - Checks last request timestamp
-        - Sleeps remaining time if needed
+        Ensures:
+        - Minimum delay between consecutive requests
         """
-        if self._last_request_time is None:
-            self._last_request_time = time.time()
-            return
-
-        elapsed = time.time() - self._last_request_time
-        if elapsed < self.rate_limit_delay:
-            await asyncio.sleep(self.rate_limit_delay - elapsed)
+        if self._last_request_time is not None:
+            elapsed = time.time() - self._last_request_time
+            if elapsed < self.rate_limit_delay:
+                wait = self.rate_limit_delay - elapsed
+                
+                logger.debug(f"Rate limiting active, sleeping {wait:.2f}s")
+                await asyncio.sleep(wait)
 
         self._last_request_time = time.time()
 
-    async def fetch_papers(
-        self,
-        max_results: Optional[int] = None,
-        start: int = 0,
-        sort_by: str = "submittedDate",
-        sort_order: str = "descending",
-        from_date: Optional[str] = None,
-        to_date: Optional[str] = None,
-        ) -> List[Dict]:
-
+    async def download(self, paper: Dict, force: bool = False) -> Optional[Path]:
         """
-        Fetch papers from Arxiv and return structured metadata.
+        Download PDF for given arXiv paper metadata.
+
+        Expected paper dict keys:
+            - arxiv_id : str
+            - pdf_url  : str
 
         Args:
-            max_results: Number of results (defaults to config value)
-            start: Pagination start index
-            sort_by: submittedDate | lastUpdatedDate | relevance
-            sort_order: ascending | descending
-            from_date: Filter start date (YYYYMMDD)
-            to_date: Filter end date (YYYYMMDD)
+            paper (dict):
+                Arxiv paper metadata dictionary.
+            force (bool):
+                If True, re-download even if file exists.
 
         Returns:
-            List[Dict]: Parsed paper metadata (id, title, abstract, authors, etc.)
-
-        Raises:
-            httpx.HTTPStatusError: API error
-            ET.ParseError: If XML parsing fails
+            Path | None:
+                - Path to downloaded PDF
+                - None if failed
         """
 
+        pdf_url = paper.get("pdf_url")
+        arxiv_id = paper.get("arxiv_id")
+
+        if not pdf_url or not arxiv_id:
+            logger.error("Missing pdf_url or arxiv_id in paper dict")
+            return None
+
+        pdf_path = self.download_dir / f"{arxiv_id}.pdf"
+
+        # Cached file
+        if pdf_path.exists() and not force:
+            logger.info(f"PDF already exists, using cache: {pdf_path.name}")
+            return pdf_path
 
         await self._rate_limit()
+        client = await self._get_client()
 
-        if max_results is None:
-            max_results = self.max_results
+        logger.info(f"Downloading PDF for {arxiv_id}")
 
-        search_query = f"cat:{self.category}"
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                async with client.stream("GET", pdf_url) as response:
+                    response.raise_for_status()
 
-        if from_date or to_date:
-            date_from = f"{from_date}0000" if from_date else "*"
-            date_to = f"{to_date}2359" if to_date else "*"
-            search_query += f"+AND+submittedDate:[{date_from}+TO+{date_to}]"
+                    with open(pdf_path, "wb") as file:
+                        async for chunk in response.aiter_bytes():
+                            file.write(chunk)
 
-        params = {
-            "search_query": search_query,
-            "start": start,
-            "max_results": max_results,
-            "sortBy": sort_by,
-            "sortOrder": sort_order,
-        }
+                logger.info(f"Successfully downloaded: {pdf_path.name}")
+                return pdf_path
 
-        safe = ":+[]*"
-        url = f"{self.base_url}?{urlencode(params, quote_via=quote, safe=safe)}"
+            except Exception as e:
+                if attempt == self.max_retries:
+                    logger.error(
+                        f"Download failed for {arxiv_id} after "
+                        f"{attempt} attempts | error={e}"
+                    )
+                    return None
 
-        client = await self.connector()
-        response = await client.get(url)
-        response.raise_for_status()
+                wait = self.retry_backoff * attempt
+                logger.warning(
+                    f"Download attempt {attempt}/{self.max_retries} failed "
+                    f"for {arxiv_id} | retrying in {wait}s | error={e}"
+                )
+                await asyncio.sleep(wait)
 
-        return self._parse_xml(response.text)
+        return None
 
-    def _parse_xml(self, xml_data: str) -> List[Dict]:
+    async def close(self):
         """
-        Convert Arxiv XML response into structured JSON.
+        Gracefully close HTTP client session.
 
-        Args:
-            xml_data (str):
-                Raw XML response from Arxiv API
-
-        Returns:
-            List[Dict]:
-                Parsed metadata list
+        Call this during:
+        - application shutdown
+        - Airflow teardown
+        - service cleanup
         """
-        root = ET.fromstring(xml_data)
-        entries = root.findall("atom:entry", self.ns)
-
-        results = []
-
-        for entry in entries:
-            paper = {
-                "arxiv_id": entry.find("atom:id", self.ns).text.split("/")[-1],
-                "title": entry.find("atom:title", self.ns).text.strip(),
-                "abstract": entry.find("atom:summary", self.ns).text.strip(),
-                "published_date": entry.find("atom:published", self.ns).text,
-                "authors": [
-                    a.find("atom:name", self.ns).text
-                    for a in entry.findall("atom:author", self.ns)
-                ],
-                "categories": [
-                    c.get("term")
-                    for c in entry.findall("atom:category", self.ns)
-                ],
-                "pdf_url": self._get_pdf(entry),
-            }
-
-            results.append(paper)
-
-        return results
-
-    def _get_pdf(self, entry):
-        """
-        Extracts PDF URL from Arxiv entry node.
-
-        Args:
-            entry (xml element):
-                Arxiv <entry> element
-
-        Returns:
-            str:
-                PDF download URL or empty string
-        """
-        for link in entry.findall("atom:link", self.ns):
-            if link.get("type") == "application/pdf":
-                return link.get("href")
-        return ""
+        if self._client:
+            await self._client.aclose()
+            self._client = None
+            logger.info("PDF Downloader HTTP session closed")

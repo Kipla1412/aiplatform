@@ -5,8 +5,8 @@ from airflow.operators.python import PythonOperator
 
 from src.custom.credentials.factory import CredentialFactory
 from src.custom.connectors.arxivconnector import ArxivConnector
-from src.custom.downloader.arxivdownloader import ArxivExtractor
-from src.custom.downloader.arxivpdf import ArxivPDFDownloader
+from src.custom.downloader.arxivmetaextractor import ArxivMetaExtractor
+from src.custom.downloader.arxivdownloader import ArxivPDFDownloader
 
 
 def credentials(**kwargs):
@@ -34,7 +34,7 @@ def fetch_arxiv(ti, **kwargs):
         raise ValueError("No config found in XCom!")
 
     connector = ArxivConnector(config)
-    extractor = ArxivExtractor(connector, config)
+    extractor = ArxivMetaExtractor(connector, config)
 
     async def run():
         papers = await extractor.fetch_papers(

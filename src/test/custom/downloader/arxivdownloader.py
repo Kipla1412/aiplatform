@@ -1,78 +1,144 @@
 import pytest
+import asyncio
+from pathlib import Path
 
-from src.custom.downloader.arxivdownloader import ArxivExtractor
-from src.custom.connectors.arxivconnector import ArxivConnector
-
-
-FAKE_XML = """
-<feed xmlns="http://www.w3.org/2005/Atom">
-  <entry>
-    <id>http://arxiv.org/abs/1234.5678v1</id>
-    <title> Test Paper Title </title>
-    <summary> This is a test abstract. </summary>
-    <published>2024-01-01T00:00:00Z</published>
-
-    <author><name>Alice</name></author>
-    <author><name>Bob</name></author>
-
-    <category term="cs.AI"/>
-
-    <link href="http://arxiv.org/pdf/1234.5678v1" type="application/pdf"/>
-  </entry>
-</feed>
-"""
+from src.custom.downloader.arxivdownloader import ArxivPDFDownloader
+from src.custom.credentials.localsettings.pdfconfig import ArxivPDFConfig
 
 
-config = {
-    "base_url": "https://export.arxiv.org/api/query",
-    "timeout_seconds": 10,
-    "rate_limit_delay": 0,
-    "max_results": 5,
-    "search_category": "cs.AI",
-    "namespaces": {
-        "atom": "http://www.w3.org/2005/Atom",
-        "arxiv": "http://arxiv.org/schemas/atom",
-    },
+pytestmark = pytest.mark.asyncio
+
+
+# ---------------- Helper ----------------
+def build_downloader(tmp_path):
+    cfg = ArxivPDFConfig(
+        download_dir=str(tmp_path),
+        timeout_seconds=5,
+        rate_limit_delay=1,
+        max_retries=3,
+        retry_backoff=1,
+    )
+    return ArxivPDFDownloader(cfg)
+
+
+SAMPLE_PAPER = {
+    "arxiv_id": "1234.5678v1",
+    "pdf_url": "http://arxiv.org/pdf/1234.5678v1.pdf"
 }
 
 
-@pytest.mark.asyncio
-async def test_fetch_papers_parses_xml_correctly(monkeypatch):
-    """
-    Unit test for ArxivExtractor
-    Mocks HTTP call and ensures XML parsing works properly.
-    """
+# ---------------- TEST 1: SUCCESS ----------------
+async def test_download_success(monkeypatch, tmp_path):
+    dl = build_downloader(tmp_path)
 
-    connector = ArxivConnector(config)
-    extractor = ArxivExtractor(connector, config)
-
-    # ---------- Fake Response ----------
-    class FakeResponse:
-        status_code = 200
-        text = FAKE_XML
-
+    class FakeStreamResponse:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
         def raise_for_status(self):
             pass
+        async def aiter_bytes(self):
+            yield b"chunk1"
+            yield b"chunk2"
 
-    async def fake_get(url):
-        return FakeResponse()
+    class FakeClient:
+        def stream(self, *_args, **_kwargs):
+            return FakeStreamResponse()
 
-    # ---------- Patch Client ----------
-    client = await connector.connect()
-    monkeypatch.setattr(client, "get", fake_get)
+    async def fake_client():
+        return FakeClient()
 
-    # ---------- Call ----------
-    papers = await extractor.fetch_papers(max_results=1)
+    monkeypatch.setattr(dl, "_get_client", fake_client)
 
-    # ---------- Assertions ----------
-    assert len(papers) == 1
+    path = await dl.download(SAMPLE_PAPER)
 
-    paper = papers[0]
+    assert path is not None
+    assert path.exists()
+    assert path.read_bytes() == b"chunk1chunk2"
 
-    assert paper["arxiv_id"] == "1234.5678v1"
-    assert paper["title"] == "Test Paper Title"
-    assert paper["abstract"] == "This is a test abstract."
-    assert paper["published_date"] == "2024-01-01T00:00:00Z"
-    assert paper["authors"] == ["Alice", "Bob"]
-    assert paper["categories"] == ["cs.AI"]
-    assert paper["pdf_url"] == "http://arxiv.org/pdf/1234.5678v1"
+    await dl.close()
+
+
+# ---------------- TEST 2: CACHE ----------------
+async def test_download_uses_cache(monkeypatch, tmp_path):
+    dl = build_downloader(tmp_path)
+
+    file_path = tmp_path / "1234.5678v1.pdf"
+    file_path.write_text("already here")
+
+    async def fake_client():
+        assert False, "HTTP should NOT be called when cache exists"
+
+    monkeypatch.setattr(dl, "_get_client", fake_client)
+
+    path = await dl.download(SAMPLE_PAPER)
+
+    assert path == file_path
+    assert path.read_text() == "already here"
+
+
+# ---------------- TEST 3: MISSING FIELDS ----------------
+async def test_download_missing_fields(tmp_path):
+    dl = build_downloader(tmp_path)
+
+    result = await dl.download({"arxiv_id": "x"})
+    assert result is None
+
+
+# ---------------- TEST 4: RETRY & FAIL ----------------
+async def test_download_retries_and_fails(monkeypatch, tmp_path):
+    dl = build_downloader(tmp_path)
+
+    class BadStream:
+        async def __aenter__(self):
+            raise Exception("boom")
+        async def __aexit__(self, *args):
+            pass
+
+    class FakeClient:
+        def stream(self, *_args, **_kwargs):
+            return BadStream()
+
+    async def fake_client():
+        return FakeClient()
+
+    monkeypatch.setattr(dl, "_get_client", fake_client)
+
+    result = await dl.download(SAMPLE_PAPER)
+
+    assert result is None
+
+
+# ---------------- TEST 5: RATE LIMIT ----------------
+async def test_rate_limit_waits(monkeypatch, tmp_path):
+    dl = build_downloader(tmp_path)
+    dl.rate_limit_delay = 1
+
+    class FakeStream:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+        def raise_for_status(self):
+            pass
+        async def aiter_bytes(self):
+            yield b"x"
+
+    class FakeClient:
+        def stream(self, *_args, **_kwargs):
+            return FakeStream()
+
+    async def fake_client():
+        return FakeClient()
+
+    monkeypatch.setattr(dl, "_get_client", fake_client)
+
+    await dl.download(SAMPLE_PAPER, force=True)
+
+    start = asyncio.get_event_loop().time()
+
+    await dl.download(SAMPLE_PAPER, force=True)
+
+    elapsed = asyncio.get_event_loop().time() - start
+    assert elapsed >= 1

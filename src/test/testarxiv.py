@@ -28,8 +28,8 @@ from src.custom.downloader.arxivdownloader import ArxivExtractor
 
 from src.custom.credentials.factory import CredentialFactory
 from src.custom.connectors.arxivconnector import ArxivConnector
-from src.custom.downloader.arxivdownloader import ArxivExtractor
-from src.custom.downloader.arxivpdf import ArxivPDFDownloader
+from src.custom.downloader.arxivmetaextractor import ArxivMetaExtractor
+from src.custom.downloader.arxivdownloader import ArxivPDFDownloader
 
 class ArxivService:
     """
@@ -41,7 +41,7 @@ class ArxivService:
         self.config = provider.get_credentials()
 
         self.connector = ArxivConnector(self.config)
-        self.extractor = ArxivExtractor(self.connector, self.config)
+        self.extractor = ArxivMetaExtractor(self.connector, self.config)
         self.downloader = ArxivPDFDownloader()
         
     async def get_latest_papers(self, limit=5):
