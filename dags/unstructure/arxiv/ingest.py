@@ -5,10 +5,10 @@ from airflow.operators.python import PythonOperator
 
 from src.custom.credentials.factory import CredentialFactory
 from src.custom.connectors.arxivconnector import ArxivConnector
+from src.custom.downloader.arxivdownloader import ArxivExtractor
 from src.custom.downloader.arxivpdf import ArxivPDFDownloader
 
 
-# --------------- TASK 1 -----------------
 def credentials(**kwargs):
     """
     Pull config from Airflow Connection using CredentialFactory
@@ -33,10 +33,11 @@ def fetch_arxiv(ti, **kwargs):
     if not config:
         raise ValueError("No config found in XCom!")
 
-    connector = ArxivConnector(config)()
+    connector = ArxivConnector(config)
+    extractor = ArxivExtractor(connector, config)
 
     async def run():
-        papers = await connector.fetch_papers(
+        papers = await extractor.fetch_papers(
             max_results=5,
             from_date=None,
             to_date=None
@@ -79,7 +80,7 @@ default_args = {
 with DAG(
     dag_id="arxiv_csai_ingestion",
     default_args=default_args,
-    start_date=datetime(2025, 1, 1),
+    start_date=datetime(2025, 1, 2),
     schedule="@daily",
     catchup=False,
     description="Fetch CS.AI Papers + Download PDFs"

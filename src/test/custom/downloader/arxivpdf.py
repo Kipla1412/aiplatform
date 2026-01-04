@@ -1,14 +1,15 @@
-import asyncio
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+import asyncio
 from pathlib import Path
 
 from src.custom.downloader.arxivpdf import ArxivPDFDownloader
-from src.custom.credentials.localsettings.pdfconfig import ArxivPDFConfig      
+from src.custom.credentials.localsettings.pdfconfig import ArxivPDFConfig
+
 
 pytestmark = pytest.mark.asyncio
 
 
+# ---------------- Helper ----------------
 def build_downloader(tmp_path):
     cfg = ArxivPDFConfig(
         download_dir=str(tmp_path),
@@ -25,27 +26,30 @@ SAMPLE_PAPER = {
     "pdf_url": "http://arxiv.org/pdf/1234.5678v1.pdf"
 }
 
-@patch("httpx.AsyncClient")
-async def test_download_success(mock_client, tmp_path):
+
+# ---------------- TEST 1: SUCCESS ----------------
+async def test_download_success(monkeypatch, tmp_path):
     dl = build_downloader(tmp_path)
 
-    class FakeStream:
+    class FakeStreamResponse:
         async def __aenter__(self):
             return self
-
         async def __aexit__(self, *args):
-            return False
-
+            pass
         def raise_for_status(self):
-            return None
-
+            pass
         async def aiter_bytes(self):
             yield b"chunk1"
             yield b"chunk2"
 
-    client_instance = mock_client.return_value
-    client_instance.__aenter__.return_value = client_instance
-    client_instance.stream.return_value = FakeStream()
+    class FakeClient:
+        def stream(self, *_args, **_kwargs):
+            return FakeStreamResponse()
+
+    async def fake_client():
+        return FakeClient()
+
+    monkeypatch.setattr(dl, "_get_client", fake_client)
 
     path = await dl.download(SAMPLE_PAPER)
 
@@ -53,69 +57,88 @@ async def test_download_success(mock_client, tmp_path):
     assert path.exists()
     assert path.read_bytes() == b"chunk1chunk2"
 
+    await dl.close()
 
-@patch("httpx.AsyncClient")
-async def test_download_uses_cache(mock_client, tmp_path):
+
+# ---------------- TEST 2: CACHE ----------------
+async def test_download_uses_cache(monkeypatch, tmp_path):
     dl = build_downloader(tmp_path)
 
     file_path = tmp_path / "1234.5678v1.pdf"
     file_path.write_text("already here")
 
-    path = await dl.download(SAMPLE_PAPER)
+    async def fake_client():
+        assert False, "HTTP should NOT be called when cache exists"
 
-    # Should NOT call http
-    mock_client.assert_not_called()
+    monkeypatch.setattr(dl, "_get_client", fake_client)
+
+    path = await dl.download(SAMPLE_PAPER)
 
     assert path == file_path
     assert path.read_text() == "already here"
 
+
+# ---------------- TEST 3: MISSING FIELDS ----------------
 async def test_download_missing_fields(tmp_path):
     dl = build_downloader(tmp_path)
 
     result = await dl.download({"arxiv_id": "x"})
     assert result is None
 
-@patch("httpx.AsyncClient")
-async def test_download_retries_and_fails(mock_client, tmp_path):
+
+# ---------------- TEST 4: RETRY & FAIL ----------------
+async def test_download_retries_and_fails(monkeypatch, tmp_path):
     dl = build_downloader(tmp_path)
 
-    # Always failing stream
-    stream = AsyncMock()
-    stream.__aenter__.side_effect = Exception("network boom")
+    class BadStream:
+        async def __aenter__(self):
+            raise Exception("boom")
+        async def __aexit__(self, *args):
+            pass
 
-    client_instance = mock_client.return_value
-    client_instance.__aenter__.return_value = client_instance
-    client_instance.stream.return_value = stream
+    class FakeClient:
+        def stream(self, *_args, **_kwargs):
+            return BadStream()
+
+    async def fake_client():
+        return FakeClient()
+
+    monkeypatch.setattr(dl, "_get_client", fake_client)
 
     result = await dl.download(SAMPLE_PAPER)
 
     assert result is None
-    assert mock_client.call_count >= 1
 
-@patch("httpx.AsyncClient")
-async def test_rate_limit_waits(mock_client, tmp_path):
+
+# ---------------- TEST 5: RATE LIMIT ----------------
+async def test_rate_limit_waits(monkeypatch, tmp_path):
     dl = build_downloader(tmp_path)
     dl.rate_limit_delay = 1
 
-    # Fake http ok
-    stream = AsyncMock()
-    stream.__aenter__.return_value = stream
-    stream.aiter_bytes.return_value = [b"x"]
-    stream.raise_for_status = lambda: None
+    class FakeStream:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+        def raise_for_status(self):
+            pass
+        async def aiter_bytes(self):
+            yield b"x"
 
-    client_instance = mock_client.return_value
-    client_instance.__aenter__.return_value = client_instance
-    client_instance.stream.return_value = stream
+    class FakeClient:
+        def stream(self, *_args, **_kwargs):
+            return FakeStream()
 
-    # 1st call
+    async def fake_client():
+        return FakeClient()
+
+    monkeypatch.setattr(dl, "_get_client", fake_client)
+
     await dl.download(SAMPLE_PAPER, force=True)
 
     start = asyncio.get_event_loop().time()
 
-    # 2nd call should wait ~1s
     await dl.download(SAMPLE_PAPER, force=True)
 
     elapsed = asyncio.get_event_loop().time() - start
     assert elapsed >= 1
-
-#  pytest src/test/custom/downloader/arxivpdf.py -q
