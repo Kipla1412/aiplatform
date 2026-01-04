@@ -1,4 +1,5 @@
 from .rdbms import RDBMSConnector
+from .arxivconnector import ArxivConnector
 
 class ConnectorFactory:
     """
