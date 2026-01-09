@@ -15,7 +15,7 @@ class ArxivService:
         provider = CredentialFactory.get_provider(mode, conn_id)
         config = provider.get_credentials()
 
-        self.connector = ArxivConnector(config)()
+        self.connector = ArxivConnector(config)
 
     async def get_papers(
         self,
