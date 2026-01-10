@@ -1,6 +1,7 @@
 from .rdbms import RDBMSConnector
 from .arxivconnector import ArxivConnector
 from .apiconnector import JinaConnector
+from .opensearch import OpenSearchConnector
 class ConnectorFactory:
     """
     The Orchestrator. 
@@ -21,5 +22,7 @@ class ConnectorFactory:
             return ArxivConnector(config=config)
         elif connector_type == "jina":
             return JinaConnector(config=config)
+        elif connector_type == "opensearch":
+            return OpenSearchConnector(config=config)
         else:
             raise ValueError(f"Unknown connector type: {connector_type}")

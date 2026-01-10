@@ -12,6 +12,7 @@ from src.custom.downloader.arxivdownloader import ArxivPDFDownloader
 from src.custom.extractors.pdfparserservice import PDFParserService
 from src.custom.chunker.arxivchunker import TextChunker
 from src.custom.embeddings.jarxivembeddings import JinaEmbeddingsService
+from src.custom.loaders.opensearch import OpenSearchService
 
 def credentials(**kwargs):
     """
@@ -197,6 +198,49 @@ def embed_chunks(ti, **kwargs):
         print("First 5 values of first vector:", embeddings[0][:5])
 
     return embeddings
+def index_chunks(ti, **kwargs):
+    """
+    Index chunks + embeddings into OpenSearch
+    """
+    chunks = ti.xcom_pull(task_ids="chunk_task")
+    embeddings = ti.xcom_pull(task_ids="embed_task")
+
+    if not chunks or not embeddings:
+        print("No chunks or embeddings to index")
+        return
+
+    if len(chunks) != len(embeddings):
+        raise ValueError("Chunks and embeddings count mismatch")
+
+    # ---- OpenSearch credentials ----
+    provider = CredentialFactory.get_provider(
+        mode="airflow",
+        conn_id="opensearch_api"
+    )
+    config = provider.get_credentials()
+
+    connector = ConnectorFactory.get_connector(
+        connector_type="opensearch",
+        config=config
+    )
+
+    service = OpenSearchService(connector, config)
+
+    # ---- Prepare bulk payload ----
+    bulk_payload = []
+
+    for chunk, embedding in zip(chunks, embeddings):
+        bulk_payload.append(
+            {
+                "chunk_data": chunk,
+                "embedding": embedding,
+            }
+        )
+
+    result = service.bulk_index_chunks(bulk_payload)
+
+    print("Indexing completed:", result)
+    return result
 
 
 default_args = {
@@ -244,4 +288,10 @@ with DAG(
     python_callable=embed_chunks
     )
 
-    credentials_task >> fetch_task >> download_task >> parse_task >> chunk_task >> embed_task
+    index_task = PythonOperator(
+    task_id="index_task",
+    python_callable=index_chunks
+    )
+
+
+    credentials_task >> fetch_task >> download_task >> parse_task >> chunk_task >> embed_task >> index_task
