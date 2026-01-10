@@ -13,3 +13,5 @@ data/
 datas/
 
 .env/
+
+.env
