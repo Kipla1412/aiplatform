@@ -61,7 +61,10 @@ class ArxivConnector:
         """
         if self._client is None:
             logger.info("Creating new HTTP client session for Arxiv")
-            self._client = httpx.AsyncClient(timeout=self.timeout)
+            self._client = httpx.AsyncClient(
+                base_url=self.base_url,
+                timeout=self.timeout
+            )
 
         else:
             logger.debug("Reusing existing Arxiv HTTP client session")

@@ -79,14 +79,17 @@ class PDFParserService:
             try:
                 result = await self.parser.parse_pdf(pdf_path)
 
-                if result:
-                    logger.info("Parsed PDF: %s", pdf_path.name)
-                    return result
+                if result is None:
+                    logger.warning("Skipping PDF: %s", pdf_path.name)
+                    return None
 
-                raise PDFParsingException("Docling returned no result")
-
-            except (PDFValidationError, PDFParsingException):
-                raise
+                logger.info("Parsed PDF: %s", pdf_path.name)
+                return result
+            
+            except PDFValidationError as e:
+                logger.warning("Validation failed for %s: %s", pdf_path.name, e)
+                return None     
+                
             except Exception as e:
                 logger.error("Unexpected parse failure: %s", e)
                 raise PDFParsingException(str(e))

@@ -1,6 +1,6 @@
 from .rdbms import RDBMSConnector
 from .arxivconnector import ArxivConnector
-
+from .apiconnector import JinaConnector
 class ConnectorFactory:
     """
     The Orchestrator. 
@@ -19,5 +19,7 @@ class ConnectorFactory:
             return ESConnector(config=config)
         elif connector_type == "arxiv":
             return ArxivConnector(config=config)
+        elif connector_type == "jina":
+            return JinaConnector(config=config)
         else:
             raise ValueError(f"Unknown connector type: {connector_type}")

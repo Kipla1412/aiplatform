@@ -29,9 +29,18 @@ class JinaConnector:
         headers : dict[str, str], optional
             Default headers applied to all requests.
         """
-        self.base_url: str = config["base_url"].rstrip("/")
-        self.timeout: int = config.get("timeout_seconds", 30)
-        self.headers: Dict[str, str] = config.get("headers", {})
+        self.base_url= config["base_url"]
+        self.api_key = config["api_key"]
+
+        if not self.api_key:
+            raise ValueError("Missing api_key for Jina API")
+
+        self.timeout = config["timeout_seconds"]
+        
+        self.headers: Dict[str, str] = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
 
         self._client: Optional[httpx.AsyncClient] = None
 
@@ -40,6 +49,18 @@ class JinaConnector:
             self.base_url,
             self.timeout,
         )
+
+    async def __call__(self) -> httpx.AsyncClient:
+        """
+        Callable shortcut for `connect()`.
+
+        Returns
+
+        httpx.AsyncClient
+            Active HTTP client.
+        """
+        return await self.connect()
+
 
     async def _create_client(self) -> httpx.AsyncClient:
         """
@@ -72,17 +93,6 @@ class JinaConnector:
         if self._client is None:
             self._client = await self._create_client()
         return self._client
-
-    async def __call__(self) -> httpx.AsyncClient:
-        """
-        Callable shortcut for `connect()`.
-
-        Returns
-
-        httpx.AsyncClient
-            Active HTTP client.
-        """
-        return await self.connect()
 
     async def close(self):
         """

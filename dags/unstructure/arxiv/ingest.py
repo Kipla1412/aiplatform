@@ -3,12 +3,15 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from pathlib import Path
+import json
 from src.custom.credentials.factory import CredentialFactory
 from src.custom.connectors.factory import ConnectorFactory
+from src.custom.extractors.schemas.arxivschema import PdfContent
 from src.custom.downloader.arxivmetaextractor import ArxivMetaExtractor
 from src.custom.downloader.arxivdownloader import ArxivPDFDownloader
 from src.custom.extractors.pdfparserservice import PDFParserService
 from src.custom.chunker.arxivchunker import TextChunker
+from src.custom.embeddings.jarxivembeddings import JinaEmbeddingsService
 
 def credentials(**kwargs):
     """
@@ -60,9 +63,10 @@ def download_pdfs(ti, **kwargs):
     """
     papers = ti.xcom_pull(task_ids="fetch_task")
     config = ti.xcom_pull(task_ids="credentials_task")
+    
     if not papers:
         print("No papers found")
-        return
+        return []
 
     downloader = ArxivPDFDownloader(config)
 
@@ -75,7 +79,10 @@ def download_pdfs(ti, **kwargs):
             downloaded.append(str(path))  
         return downloaded
 
-    return asyncio.run(run())
+    pdf_paths = asyncio.run(run())
+    print(f"Downloaded {len(pdf_paths)} PDFs")
+    return pdf_paths
+
    
 
 def parse_pdfs(ti, **kwargs):
@@ -104,13 +111,14 @@ def parse_pdfs(ti, **kwargs):
         for path in pdf_paths:
             res = await parser_service.parse_pdf(Path(path))
             if res:
-                results.append(res)
-            return results
+                results.append(res.model_dump())
+        return results
 
-        parsed_docs = asyncio.run(run())
+    parsed_docs = asyncio.run(run())
 
-        print(f"Parsed {len(parsed_docs)} PDFs")
-        return parsed_docs
+    print(f"Parsed {len(parsed_docs)} PDFs")
+    return  parsed_docs
+
 
         # results = await parser_service.parse_all_pdfs()
         # print(f"Parsed {len(results)} PDFs")
@@ -134,14 +142,61 @@ def chunks_pdfs(ti, **kwargs):
 
     all_chunks = []
 
-    for pdf in parsed_docs:
+    for pdf_dict in parsed_docs:
+        
+        pdf = PdfContent(**pdf_dict)
         chunks = chunker.chunk_pdf(pdf)
         print(f"PDF {pdf.metadata.get('arxiv_id')} -> {len(chunks)} chunks")
-        all_chunks.extend(chunks)
+        # all_chunks.extend(chunks)
+        for chunk in chunks:
+            all_chunks.append(chunk.model_dump())
+    
+    output_path = Path("/tmp/arxiv_chunks.json")
+    with output_path.open("w") as f:
+        json.dump(all_chunks, f, indent=2)
 
+    print("Chunks saved to:", output_path)
     print(f"Total chunks created: {len(all_chunks)}")
     return all_chunks
 
+def embed_chunks(ti, **kwargs):
+    """
+    Generate embeddings for text chunks
+    """
+    chunks = ti.xcom_pull(task_ids="chunk_task")
+
+    if not chunks:
+        print("No chunks received")
+        return []
+
+    provider = CredentialFactory.get_provider(
+        mode="airflow",
+        conn_id="jina_api"
+    )
+    config = provider.get_credentials()
+
+    connector = ConnectorFactory.get_connector(
+        connector_type="jina",
+        config=config
+    )
+
+    embedding_service = JinaEmbeddingsService(connector, config)
+
+    texts =  [c["text"] for c in chunks]
+
+    async def run():
+        vectors = await embedding_service.embed_passages(texts)
+        return vectors
+
+    embeddings = asyncio.run(run())
+
+    print("Embeddings generated:", len(embeddings))
+
+    if embeddings:
+        print("One embedding vector length:", len(embeddings[0]))
+        print("First 5 values of first vector:", embeddings[0][:5])
+
+    return embeddings
 
 
 default_args = {
@@ -181,7 +236,12 @@ with DAG(
 
     chunk_task = PythonOperator(
     task_id="chunk_task",
-    python_callable=chunk_pdfs
+    python_callable=chunks_pdfs
     )
 
-    credentials_task >> fetch_task >> download_task >> parse_task >> chunk_task
+    embed_task = PythonOperator(
+    task_id="embed_task",
+    python_callable=embed_chunks
+    )
+
+    credentials_task >> fetch_task >> download_task >> parse_task >> chunk_task >> embed_task
