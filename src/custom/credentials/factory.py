@@ -1,5 +1,8 @@
 from .airflow import AirflowCredentials
 from .arxiv import ArxivCredentials
+from .ollama import OllamaCredentials
+from .redis import RedisCredentials
+from .langfuse import LangfuseCredentials
 
 class CredentialFactory:
     """
@@ -16,6 +19,15 @@ class CredentialFactory:
 
         elif mode == "arxivlocal":
             return ArxivCredentials()
+
+        elif mode == "ollama":
+            return OllamaCredentials()
+
+        elif mode == "redis":
+            return RedisCredentials()
+
+        elif mode == "langfuse":
+            return LangfuseCredentials()        
         
         else:
             raise ValueError(f"Unknown mode: {mode}. Use 'airflow' or 'local'.")

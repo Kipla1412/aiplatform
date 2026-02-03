@@ -41,7 +41,7 @@ ARXIV_PAPERS_CHUNKS_MAPPING = {
                 "method": {
                     "name": "hnsw",  # Hierarchical Navigable Small World
                     "space_type": "cosinesimil",  # Cosine similarity
-                    "engine": "nmslib",
+                    "engine":"lucene", #"nmslib"
                     "parameters": {
                         "ef_construction": 512,  # Higher value = better recall, slower indexing
                         "m": 16,  # Number of bi-directional links
@@ -71,18 +71,38 @@ ARXIV_PAPERS_CHUNKS_MAPPING = {
 
 HYBRID_RRF_PIPELINE = {
     "id": "hybrid-rrf-pipeline",
-    "description": "Post processor for hybrid RRF search",
+    "description": "Normalization and combination pipeline for hybrid search",
     "phase_results_processors": [
         {
-            "score-ranker-processor": {
+            "normalization-processor": {
+                "normalization": {
+                    "technique": "min_max"  # Scales everything between 0 and 1
+                },
                 "combination": {
-                    "technique": "rrf",  # Reciprocal Rank Fusion
-                    "rank_constant": 60,  # Default k=60 for RRF formula: 1/(k+rank)
+                    "technique": "arithmetic_mean",  # Simplest way to merge
+                    "parameters": {
+                        "weights": [0.5, 0.5]  # Balanced BM25 and Vector
+                    }
                 }
             }
         }
     ],
 }
+
+# HYBRID_RRF_PIPELINE = {
+#     "id": "hybrid-rrf-pipeline",
+#     "description": "Post processor for hybrid RRF search",
+#     "phase_results_processors": [
+#         {
+#             "score-ranker-processor": {
+#                 "combination": {
+#                     "technique": "rrf",  # Reciprocal Rank Fusion
+#                     "rank_constant": 60,  # Default k=60 for RRF formula: 1/(k+rank)
+#                 }
+#             }
+#         }
+#     ],
+# }
 
 # Alternative: Weighted average pipeline (commented out - not used by default)
 # This could be used if you need explicit control over BM25 vs vector weights

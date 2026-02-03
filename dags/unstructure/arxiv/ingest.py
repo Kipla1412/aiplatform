@@ -76,6 +76,11 @@ def download_pdfs(ti, **kwargs):
         for p in papers:
             print(f"Downloading: {p['title']}")
             path = await downloader.download(p)
+
+            if not path:
+                print(f"Skipping PDF (download failed): {p.get('arxiv_id')}")
+                continue
+
             print(f"Saved: {path}")
             downloaded.append(str(path))  
         return downloaded
@@ -110,6 +115,16 @@ def parse_pdfs(ti, **kwargs):
     async def run():
         results = []
         for path in pdf_paths:
+
+            if not path:
+                print("Skipping empty PDF path")
+                continue
+            
+            pdf_path = Path(path)
+            if not pdf_path.exists():
+                print(f"PDF file does not exist: {pdf_path}")
+                continue
+
             res = await parser_service.parse_pdf(Path(path))
             if res:
                 results.append(res.model_dump())
@@ -198,11 +213,13 @@ def embed_chunks(ti, **kwargs):
         print("First 5 values of first vector:", embeddings[0][:5])
 
     return embeddings
+
 def index_chunks(ti, **kwargs):
     """
     Index chunks + embeddings into OpenSearch
     """
     chunks = ti.xcom_pull(task_ids="chunk_task")
+
     embeddings = ti.xcom_pull(task_ids="embed_task")
 
     if not chunks or not embeddings:
@@ -212,28 +229,62 @@ def index_chunks(ti, **kwargs):
     if len(chunks) != len(embeddings):
         raise ValueError("Chunks and embeddings count mismatch")
 
+    # ---- OpenSearch credentials ----
+    provider = CredentialFactory.get_provider(
+        mode="airflow",
+        conn_id="opensearch_api"
+    )
+    config = provider.get_credentials()
+
     connector = ConnectorFactory.get_connector(
         connector_type="opensearch",
         config=config
     )
 
     service = OpenSearchService(connector, config)
-
+    service.setup_indices(force=False)
     # ---- Prepare bulk payload ----
     bulk_payload = []
 
     for chunk, embedding in zip(chunks, embeddings):
+        # MAPPING TO YOUR OPENSEARCH SCHEMA HERE
+
+        arxiv_id = chunk.get("arxiv_id")
+        flat_chunk = {
+            "chunk_text": chunk["text"],  
+            "arxiv_id": arxiv_id,
+            "chunk_index": chunk["metadata"].get("chunk_index"),
+            "section_title": chunk["metadata"].get("section_title"),
+            "chunk_word_count": chunk["metadata"].get("word_count"),
+            "start_char": chunk["metadata"].get("start_char", 0),
+            "end_char": chunk["metadata"].get("end_char", 0),
+        }
         bulk_payload.append(
             {
-                "chunk_data": chunk,
+                "chunk_data": flat_chunk,
                 "embedding": embedding,
             }
         )
+    BATCH_SIZE = 5
 
-    result = service.bulk_index_chunks(bulk_payload)
+    success = 0
+    failed = 0
 
-    print("Indexing completed:", result)
-    return result
+    for i in range(0, len(bulk_payload), BATCH_SIZE):
+        batch = bulk_payload[i:i+BATCH_SIZE]
+        print(f"Indexing batch {i} to {i+BATCH_SIZE}")
+
+        res = service.bulk_index_chunks(batch) # ❗ VERY IMPORTANT: don't refresh every time)
+
+        success += res["success"]
+        failed += res["failed"]
+
+    print("Final indexing result:", {"success": success, "failed": failed})
+    return {"success": success, "failed": failed}
+    # result = service.bulk_index_chunks(bulk_payload)
+
+    # print("Indexing completed:", result)
+    # return result
 
 
 default_args = {

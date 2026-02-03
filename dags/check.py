@@ -14,7 +14,7 @@ def my_first_dag():
     # 2. Define tasks as regular Python functions
     @task()
     def get_name():
-        return "Umar"
+        return "Kipla (^ _ ^)"
 
     @task()
     def say_hello(name: str):

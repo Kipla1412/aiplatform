@@ -314,7 +314,7 @@ class OpenSearchService:
 
         response = self.client.search(
             index=self.index_name,
-            body={"size": size, "query": hybrid_query},
+            body={"size": size, "query": hybrid_query, "_source": {"excludes": ["embedding"]}}, #Add this line here(_source) we only get response without embedings
             params={"search_pipeline": self.rrf_pipeline_id},
         )
 
@@ -374,6 +374,12 @@ class OpenSearchService:
             actions.append({"_index": self.index_name, "_source": data})
 
         success, failed = helpers.bulk(self.client, actions, refresh=True,  raise_on_error=False,)
+        
+        logger.info("==== BULK FAILURE DETAILS START ====")
+        for item in failed:
+            logger.info(item)
+        logger.info("==== BULK FAILURE DETAILS END ====")
+
         logger.info("Bulk indexed %d chunks, %d failed", success, len(failed))
         return {"success": success, "failed": len(failed)}
 
