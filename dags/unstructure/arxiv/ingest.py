@@ -212,13 +212,6 @@ def index_chunks(ti, **kwargs):
     if len(chunks) != len(embeddings):
         raise ValueError("Chunks and embeddings count mismatch")
 
-    # ---- OpenSearch credentials ----
-    provider = CredentialFactory.get_provider(
-        mode="airflow",
-        conn_id="opensearch_api"
-    )
-    config = provider.get_credentials()
-
     connector = ConnectorFactory.get_connector(
         connector_type="opensearch",
         config=config
