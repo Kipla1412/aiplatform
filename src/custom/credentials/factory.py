@@ -3,6 +3,8 @@ from .arxiv import ArxivCredentials
 from .ollama import OllamaCredentials
 from .redis import RedisCredentials
 from .langfuse import LangfuseCredentials
+from .jina import JinaCredentials
+from .opensearch import OpenSearchCredentials
 
 class CredentialFactory:
     """
@@ -27,7 +29,13 @@ class CredentialFactory:
             return RedisCredentials()
 
         elif mode == "langfuse":
-            return LangfuseCredentials()        
+            return LangfuseCredentials() 
+
+        elif mode == "jina":
+            return JinaCredentials() 
+
+        elif mode == "opensearch":
+            return OpenSearchCredentials()      
         
         else:
             raise ValueError(f"Unknown mode: {mode}. Use 'airflow' or 'local'.")

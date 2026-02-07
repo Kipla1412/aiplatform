@@ -1,6 +1,6 @@
 from typing import Dict
 from .base import CredentialProvider
-from src.custom.credentials.localsettings.arxivconfig import ArxivConfig
+from src.custom.credentials.schemas.arxivconfig import ArxivConfig
 
 
 class ArxivCredentials(CredentialProvider):

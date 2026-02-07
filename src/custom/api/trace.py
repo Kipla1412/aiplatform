@@ -12,6 +12,9 @@ from src.custom.connectors.ollama import OllamaConnector
 from src.custom.llm.ollama import OllamaClient
 from src.custom.llm.cache.redis import CacheClient
 from src.custom.llm.schemas.redisschema import AskRequest, AskResponse
+# from src.custom.observability.ragtracer import RAGTracer
+# from src.custom.observability.langfusetracer import LangfuseTracer
+
 from src.custom.tracing.tracker import RAGTracer
 from src.custom.tracing.langfuseengine import LangfuseTracer
 # Load env
@@ -191,6 +194,90 @@ async def hybrid_search(req: SearchRequest):
         "total_results": results["total"],
         "hits": results["hits"],
     }
+
+# @app.post("/rag/answer", response_model=AskResponse)
+# async def rag_answer(req: AskRequest):
+
+#     tracer = services.langfuse_tracer
+#     start_time = time.time()
+
+#     with tracer.trace_request(user_id="anonymous", query=req.query) as trace:
+
+#         # 0️⃣ Cache check
+#         cached = await services.cache_client.find_cached_response(req)
+#         if cached:
+#             return cached
+
+#         # 1️⃣ Embedding
+#         query_embedding = None
+#         if req.use_hybrid:
+#             with tracer.trace_embedding(req.query):
+#                 query_embedding = await services.embed_query(req.query)
+
+#         # 2️⃣ Retrieval
+#         with tracer.trace_search(req.query, req.top_k) as search_span:
+#             search_results = services.opensearch_service.search_unified(
+#                 query=req.query,
+#                 query_embedding=query_embedding,
+#                 size=req.top_k,
+#                 categories=req.categories,
+#                 use_hybrid=req.use_hybrid,
+#                 min_score=0.0,
+#             )
+
+#             chunks = search_results.get("hits", [])
+#             arxiv_ids = [c.get("arxiv_id") for c in chunks if c.get("arxiv_id")]
+
+#         tracer.end_search(search_span, chunks, arxiv_ids, search_results.get("total", 0))
+
+#         if not chunks:
+#             response = AskResponse(
+#                 query=req.query,
+#                 answer="No relevant documents found to answer this question.",
+#                 sources=[],
+#                 chunks_used=0,
+#                 search_mode="bm25" if not req.use_hybrid else "hybrid",
+#             )
+#             tracer.end_request(trace, response.answer, time.time() - start_time)
+#             return response
+
+#         # 3️⃣ Prompt Construction
+#         with tracer.trace_prompt_construction(chunks):
+#             prompt = "RAG Prompt"  # Replace with your real builder
+
+#         # 4️⃣ LLM Generation
+#         with tracer.trace_generation(req.model, prompt) as generation:
+#             rag_output = await services.ollama_client.generate_rag_answer(
+#                 query=req.query,
+#                 chunks=chunks,
+#                 model=req.model,
+#             )
+
+#         tracer.end_generation(
+#             generation,
+#             response=rag_output["answer"],
+#             usage=None,  # add token info later if available
+#         )
+
+#         response = AskResponse(
+#             query=req.query,
+#             answer=rag_output["answer"],
+#             sources=rag_output.get("sources", []),
+#             chunks_used=len(chunks),
+#             search_mode="bm25" if not req.use_hybrid else "hybrid",
+#         )
+
+#         # 5️⃣ Cache store
+#         await services.cache_client.store_response(req, response)
+
+#         tracer.end_request(trace, response.answer, time.time() - start_time)
+
+#         # 6️⃣ Feedback score
+#         tracer.score_answer(0.95)
+
+#         return response
+
+
 # @app.post("/rag/answer", response_model=AskResponse)
 # async def rag_answer(req: AskRequest):
 

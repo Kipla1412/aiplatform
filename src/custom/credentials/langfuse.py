@@ -1,6 +1,6 @@
 from typing import Dict, Any
 from .base import CredentialProvider
-from src.custom.credentials.localsettings.langfuseconfig import  LangfuseConfig
+from src.custom.credentials.schemas.langfuseconfig import  LangfuseConfig
 
 class LangfuseCredentials(CredentialProvider):
     """

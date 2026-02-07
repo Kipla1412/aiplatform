@@ -1,6 +1,6 @@
 from typing import Dict, Any
 from .base import CredentialProvider
-from src.custom.credentials.localsettings.ollamaconfig import ollamaconfig
+from src.custom.credentials.schemas.ollamaconfig import ollamaconfig
 
 class OllamaCredentials(CredentialProvider):
     """
